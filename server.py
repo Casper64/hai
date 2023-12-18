@@ -12,6 +12,8 @@ sel = selectors.DefaultSelector()
 
 VALID_SYMMETRIC_ALGORITHMS = ['AES-256']
 
+key_store = {}
+
 ################### Handshake ###################
 
 def do_handshake(conn, addr):
@@ -26,16 +28,16 @@ def do_handshake(conn, addr):
     # receive client preferences
     client_preferences_data = conn.recv(settings.HANDHSAKE_HEADER_LEN)
     client_config = json.loads(client_preferences_data)
-    
-    # receive peer public key
-    peer_public_key_bytes = conn.recv(client_config['public_key_len'])
-    peer_public_key = serialization.load_pem_public_key(peer_public_key_bytes)
+    # receive clients public key
+    client_public_key_bytes = conn.recv(client_config['public_key_len'])
+    # load public key from PEM format
+    client_public_key = serialization.load_pem_public_key(client_public_key_bytes)
         
-    print("received public key:", peer_public_key_bytes)
+    print("received public key:", client_public_key_bytes)
 
     # get the shared key and derive a new key from the shared key
     shared_key = private_key.exchange(
-        ec.ECDH(), peer_public_key
+        ec.ECDH(), client_public_key
     )    
     derived_key = HKDF(
         algorithm=settings.HASH_ALGORITHM(),
@@ -44,20 +46,27 @@ def do_handshake(conn, addr):
         info=None
     ).derive(shared_key)
 
+    # pick the strongest algorithm that the client supports
     algorithm = util.pick_algorithm(VALID_SYMMETRIC_ALGORITHMS, client_config)
     if algorithm is None:
+        # the client doesn't support any of the algorithms we define as strong
         raise Exception("Client sent weak/invalid algorithms")
     print(f"Picked algorithm {algorithm} as symmetric encryption algorithm")
 
-    header = util.create_header_server(algorithm, len(public_key_bytes))
+    # let the client know which algorithm we picked and send our public key
+    header = util.create_algorithm_header_server(algorithm, len(public_key_bytes))
     conn.send(header)
     conn.send(public_key_bytes)
 
-    handshake_data = client_preferences_data + peer_public_key_bytes
+    # sign all the data received from the client with the derived key.
+    # the client can validate that each message that it send
+    # is unchanged.
+    handshake_data = client_preferences_data + client_public_key_bytes
     signed_handshake = util.sign_message(handshake_data, derived_key)
-
     conn.send(signed_handshake.ljust(settings.HANDHSAKE_HEADER_LEN))
 
+    # receive the HMAC of the messages the client received from us,
+    # so we can verify that the messages we send have arrived unchanged
     client_handshake_hmac = conn.recv(settings.HANDHSAKE_HEADER_LEN)
     client_handshake_hmac = client_handshake_hmac.rstrip()
 
@@ -67,11 +76,25 @@ def do_handshake(conn, addr):
 
     try:
         h.verify(client_handshake_hmac)
-    except exceptions.InvalidSignature as e:
+    except exceptions.InvalidSignature:
         raise Exception("handshake HMAC could not be verified!")
 
 
     print(f"Handshake verified! Further communication with peer {addr[0]}:{addr[1]} is now encrypted with {algorithm}")
+    
+    (server_aes_keys, client_aes_keys) = util.derive_symmetric_keys_from_shared_key(shared_key, cipher)
+    print(server_aes_keys)
+    print(client_aes_keys)
+    key_data = {
+        "shared_key": shared_key,
+        "client_public_key": client_public_key,
+        "server_public_key": public_key,
+        "server_private_key": private_key,
+        "server_cipher": server_aes_keys,
+        "client_cipher": client_aes_keys,
+    }
+
+    sel.register(conn, selectors.EVENT_READ, key_data)
 
 ################### Socket stuff ###################
 
@@ -87,7 +110,7 @@ def accept(sock, mask):
         conn.close()
         return
 
-def recv(conn, mask):
+def recv(conn, key_data):
     data = conn.recv(1024)
     addr = conn.getpeername()
     if data:
@@ -122,8 +145,10 @@ def start_server():
         while True:
             events = sel.select()
             for key, mask in events:
-                callback = key.data
-                callback(key.fileobj, mask)
+                key_data = key.data
+                if mask & selectors.EVENT_READ:
+                    recv(key.fileobj, key_data)
+
     except KeyboardInterrupt:
         print("Closing server...")
 

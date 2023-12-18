@@ -10,6 +10,7 @@ import socket
 VALID_SYMMETRIC_ALGORITHMS = ['AES-256', 'DES-128']
 
 def do_handshake(conn):
+    # generate private key, TODO: check if this elliptic function is safe
     private_key = ec.generate_private_key(
         ec.SECP384R1()
     )
@@ -17,20 +18,22 @@ def do_handshake(conn):
     # encode public key into PEM format
     public_key_bytes = public_key.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
 
-    header = util.create_header_client(VALID_SYMMETRIC_ALGORITHMS, len(public_key_bytes))
-
+    # create header containing which algorithms the client supports and
+    # how long the send public key is.
+    header = util.create_algorithm_header_client(VALID_SYMMETRIC_ALGORITHMS, len(public_key_bytes))
     conn.send(header)
     conn.send(public_key_bytes)
 
+    # receive symmetric algorithm and public key len from the server
     server_choices_data = conn.recv(settings.HANDHSAKE_HEADER_LEN)
     server_config = json.loads(server_choices_data)
-
+    # verify chosen key from server
     algorithm = server_config['algorithm']
     if algorithm not in VALID_SYMMETRIC_ALGORITHMS:
         raise Exception("server picked unsupported algorithm")
     
     print(f"server picked {algorithm} as symmetric encryption algorithm")
-
+    # receive the servers public key
     server_public_key_bytes = conn.recv(server_config['public_key_len'])
     server_public_key = serialization.load_pem_public_key(server_public_key_bytes)
 
@@ -47,11 +50,15 @@ def do_handshake(conn):
         info=None
     ).derive(shared_key)
 
+    # sign all the data received from the server with the derived key.
+    # the server can validate that each message that it send
+    # is unchanged.
     handshake_data = server_choices_data + server_public_key_bytes
     signed_handshake = util.sign_message(handshake_data, derived_key)
-
     conn.send(signed_handshake.ljust(settings.HANDHSAKE_HEADER_LEN))
 
+    # receive the HMAC of the messages the server received from us,
+    # so we can verify that the messages we send have arrived unchanged
     server_handshake_hmac = conn.recv(settings.HANDHSAKE_HEADER_LEN)
     server_handshake_hmac = server_handshake_hmac.rstrip()
 
@@ -65,6 +72,10 @@ def do_handshake(conn):
         raise Exception("handshake HMAC could not be verified!")
     
     print(f"Handshake verified! Further communication with server localhost:9000 is now encrypted with {algorithm}")
+
+    (server_aes_keys, client_aes_keys) = util.derive_symmetric_keys_from_shared_key(shared_key, '')
+    print(server_aes_keys)
+    print(client_aes_keys)
 
 
 ################### Socket stuff ###################
