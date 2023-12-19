@@ -2,17 +2,20 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import serialization, hashes, hmac
 from cryptography import exceptions
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
 import json
 import selectors
 import settings
 import socket
 import util
+import threading
+
+import os
 
 sel = selectors.DefaultSelector()
 
 VALID_SYMMETRIC_ALGORITHMS = ['AES-256']
-
-key_store = {}
 
 ################### Handshake ###################
 
@@ -82,7 +85,7 @@ def do_handshake(conn, addr):
 
     print(f"Handshake verified! Further communication with peer {addr[0]}:{addr[1]} is now encrypted with {algorithm}")
     
-    (server_aes_keys, client_aes_keys) = util.derive_symmetric_keys_from_shared_key(shared_key, cipher)
+    (server_aes_keys, client_aes_keys) = util.derive_symmetric_keys_from_shared_key(shared_key)
     print(server_aes_keys)
     print(client_aes_keys)
     key_data = {
@@ -90,11 +93,22 @@ def do_handshake(conn, addr):
         "client_public_key": client_public_key,
         "server_public_key": public_key,
         "server_private_key": private_key,
-        "server_cipher": server_aes_keys,
-        "client_cipher": client_aes_keys,
+        "server_cipher": Cipher(algorithms.AES256(server_aes_keys["key"]), modes.CBC(server_aes_keys["iv"])),
+        "client_cipher": Cipher(algorithms.AES256(client_aes_keys["key"]), modes.CBC(client_aes_keys["iv"])),
     }
 
+    listen_for_msg_thread = threading.Thread(target=get_messages, args=(conn, key_data))
+    listen_for_msg_thread.start()
     sel.register(conn, selectors.EVENT_READ, key_data)
+
+    
+################### Send Socket Messages ###################
+    
+def get_messages(conn, key_data):
+    while True:
+        msg = input("> ")
+        send(conn, msg, key_data)
+
 
 ################### Socket stuff ###################
 
@@ -110,18 +124,22 @@ def accept(sock, mask):
         conn.close()
         return
 
+    
+def send(conn, msg, key_data):
+    ciphertext = util.encrypt_msg(msg, key_data["server_cipher"])
+
+    conn.send(ciphertext)
+    
 def recv(conn, key_data):
     data = conn.recv(1024)
     addr = conn.getpeername()
     if data:
-        print("sending", repr(data), f"to {addr[0]}:{addr[1]}")
-        conn.send(data)
+        msg = util.decrypt_msg(data, key_data["client_cipher"])
+        util.print_peer_message(msg, f"{addr[0]}:{addr[1]}")
     else:
         sel.unregister(conn)
         close(conn)
-
-def send():
-    pass
+        return
 
 def close(conn):
     addr = conn.getpeername()
@@ -139,7 +157,7 @@ def bind_and_listen(host, port):
 
 def start_server():
     sock = bind_and_listen('localhost', 9000)
-    sel.register(sock, selectors.EVENT_READ, accept)
+    sel.register(sock, selectors.EVENT_READ)
 
     try:
         while True:
@@ -147,10 +165,15 @@ def start_server():
             for key, mask in events:
                 key_data = key.data
                 if mask & selectors.EVENT_READ:
-                    recv(key.fileobj, key_data)
+                    if key_data is None:
+                        accept(key.fileobj, mask)
+                    else:
+                        recv(key.fileobj, key_data)
+
 
     except KeyboardInterrupt:
         print("Closing server...")
+        os._exit(0)
 
 if __name__ == "__main__":
     start_server()

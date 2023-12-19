@@ -1,8 +1,9 @@
 import json
 import settings
-from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives import hashes, hmac, padding
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
 
 def create_algorithm_header_client(supported_algorithms, public_key_len):
     header = {
@@ -50,13 +51,13 @@ def sign_message(message, key):
     h.update(message)
     return h.finalize()
 
-def derive_symmetric_keys_from_shared_key(key, algorithm_fn):
+def derive_symmetric_keys_from_shared_key(key):
     # expand the shared key to 96 bits. We split up these key into 4 parts:
     # two 32 bits keys and two 16 bits initialization vectors for AES
     hkdf = HKDFExpand(
         algorithm=settings.HASH_ALGORITHM(),
         length=2 * 32 + 2 * 16,
-        info=None
+        info=b'expanded key from ECDH'
     )
     key = hkdf.derive(key)
    
@@ -67,3 +68,38 @@ def derive_symmetric_keys_from_shared_key(key, algorithm_fn):
         "key": key[48:80],
         "iv": key[80:96]
     })
+
+# encrypt `msg`` with the Cipher instance `cipher`
+def encrypt_msg(msg, cipher):
+    encryptor = cipher.encryptor()
+    # create padder to make the msg divisible by the block length of AES-256
+    padder = padding.PKCS7(algorithms.AES256.block_size).padder()
+    # encode with utf-8
+    padded_msg = padder.update(msg.encode('utf-8')) + padder.finalize()
+
+    # encrypt the padded message using our cipher
+    ciphertext = encryptor.update(padded_msg) + encryptor.finalize()
+    return ciphertext
+
+def decrypt_msg(ciphertext, cipher):
+    decryptor = cipher.decryptor()
+    # decrypt the ciphertext to get a padded version of the message
+    padded_msg = decryptor.update(ciphertext) + decryptor.finalize()
+    unpadder = padding.PKCS7(algorithms.AES256.block_size).unpadder()
+    # unpad the decrypted ciphertext to get the message
+    msg = unpadder.update(padded_msg) + unpadder.finalize()
+    # decode with utf-8
+    return msg.decode('utf-8')
+
+# print a message from a peer and keep the current cursor position
+def print_peer_message(msg, peer_name):
+    print(
+                "\u001B[s"             # Save current cursor position
+                "\u001B[A"             # Move cursor up one line
+                "\u001B[999D"          # Move cursor to beginning of line
+                "\u001B[S"             # Scroll up/pan window down 1 line
+                "\u001B[L",            # Insert new line
+    end="")     
+    print(f"{peer_name}: {msg}", end="")
+    print("\u001B[u", end="")  # Move back to the former cursor position
+    print("", end="", flush=True)  # Flush message
