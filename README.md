@@ -12,6 +12,7 @@ This program was tested using python `3.11.6`.
 Make a new virtual environment and instal the required packages
 ```bash
 python3 -m venv venv
+. ./venv/bin/activate
 pip install -r requirements.txt
 ```
 
