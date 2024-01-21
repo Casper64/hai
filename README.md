@@ -2,41 +2,38 @@
 
 The 100% console based secure messaging program.
 
-## Informatie
 Alle encryptie methodes: send, recv, close en accept staan in `hai_core.py`.
 De rest van de code is voor de console app.
 
-Het programma is beide een client en een server. Het programma dat als eerste
-een connectie aangaat wordt beschouwd als "client" tijdens de handshake.
+## Quick Start
 
-Alleen de `cryptography` module is nodig om het programma te runnen.
-Zie https://cryptography.io/
+This program was tested using python `3.11.6`.
 
-## Gebruik 
+Make a new virtual environment and instal the required packages
+```bash
+python3 -m venv venv
+pip install -r requirements.txt
+```
 
-Dit programma is getest in python `3.11.6` en kan op de volgende manier
-gebruikt worden:
+Then start the program in `hai.py`.
 ```bash
 python3 hai.py
 ```
 
 ## Settings
-In het bestand `settings.py` kunnen een paar instellingen van het progamma
-worden aangepast. 
+
+You can configure the program in `hai.py`.
 
 ## Key generation
 
-Encryptie keys worden automatisch gegenereerd, maar er kan ook gebruik
-gemaakt worden van zelfgegenereerde keys door gebruik te maken van het
-`create_keys.sh` script.
-
+Keys will be automatically generated. You can generate your own keys using
+the `create_keys.sh` program.
 ```bash
 chmod +x create_keys.sh
 ./create_keys.sh
 ```
 
-Daarna moeten de `PRIVATE_KEY` en `PUBLIC_KEY` instellingen worden aangepast
-in `settings.py`.
+Then change the `PRIVATE_KEY` and `PUBLIC_KEY` settings in `settings.py`.
 
 > **Note:**
-> Keys moeten in PEM formaat zijn en gebruik maken van een elliptische curve
+> Keys have to be encoded in PEM format and use an elliptic curve.
